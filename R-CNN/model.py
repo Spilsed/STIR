@@ -134,7 +134,7 @@ def train_svm(num_epochs):
 
     coco_dataset = CocoDetection(root='data/train2014', annFile='data/annotations/instances_train2014.json',
                                  transform=transform)
-    dataloader = DataLoader(coco_dataset, batch_size=1, shuffle=True)
+    dataloader = DataLoader(coco_dataset, batch_size=32, shuffle=True)
 
     vgg16 = VGG16()
     vgg16.eval()
