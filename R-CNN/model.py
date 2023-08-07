@@ -1,13 +1,20 @@
 import torch
 import torch.nn as nn
+import torch.optim as optim
 import cv2
-import torchvision.models
+import torchvision
+from torchvision import transforms
+from torchvision.datasets import CocoDetection
+from torch.utils.data import DataLoader
+import torch.nn.functional as F
+
 
 image = cv2.imread("img.png")
+resized = cv2.resize(image, (224, 244))
 
-ss = cv2.ximgproc.segmentation.createSelectiveSearchSegmentation()
-ss.setBaseImage(image)
-ss.switchToSelectiveSearchFast()
+# ss = cv2.ximgproc.segmentation.createSelectiveSearchSegmentation()
+# ss.setBaseImage(image)
+# ss.switchToSelectiveSearchFast()
 
 class VGGBlock(nn.Module):
     def __init__(self, input, output, num_conv):
@@ -41,7 +48,7 @@ class VGG16(nn.Module):
         self.flatten = nn.Flatten()
 
         self.classifier = nn.Sequential(
-            nn.Linear(25088, 4096),
+            nn.Linear(512*49, 4096),
             nn.ReLU(inplace=True),
             nn.Dropout(),
             nn.Linear(4096, 4096),
@@ -68,9 +75,9 @@ class VGG16(nn.Module):
         return x
 
 class SVM(nn.Module):
-    def __init__(self, classes):
+    def __init__(self, features, classes):
         super(SVM, self).__init__()
-        self.fc = nn.Linear(4096, classes)
+        self.fc = nn.Linear(features, classes)
 
         self.fc.register_forward_hook(add_hook())
 
@@ -80,8 +87,8 @@ class SVM(nn.Module):
 class RCNN(nn.Module):
     def __init__(self, classes):
         super(RCNN, self).__init__()
-        self.vgg = VGG16()
-        self.svm = SVM(classes)
+        self.vgg = pretrained_custom_vgg16()
+        self.svm = SVM(self.vgg.features(torch.randn(1, 3, 244, 244)).view(1, -1).size(1), classes)
 
     def forward(self, x):
         x = self.vgg(x)
@@ -92,23 +99,83 @@ def add_hook():
         print("Output Shape :", list(output.shape))
     return size_hook
 
-if __name__ == '__main__':
-    vgg16 = VGG16()
-    full = RCNN(10)
+def test_rcnn():
+    model = VGG16()
+    model.eval()
+    model(torch.randn(1, 3, 244, 244))
 
-    full(torch.randn(1, 3, 244, 244))
+def pretrained_custom_vgg16():
+    vgg16 = VGG16()
+    vgg16.eval()
 
     vgg16_pretrained = torchvision.models.vgg16(weights=torchvision.models.VGG16_Weights.IMAGENET1K_V1)
-
-    before = vgg16.state_dict()
+    vgg16_pretrained.eval()
 
     state_dict_pretrained = vgg16_pretrained.state_dict()
     state_dict_custom = vgg16.state_dict()
 
     for i in range(len(state_dict_custom.keys())):
-        state_dict_custom[list(state_dict_custom.keys())[i]] = state_dict_pretrained[list(state_dict_pretrained.keys())[i]]
-        print(torch.equal(state_dict_custom[list(state_dict_custom.keys())[i]], state_dict_pretrained[list(state_dict_pretrained.keys())[i]]))
+        state_dict_custom[list(state_dict_custom.keys())[i]] = state_dict_pretrained[
+            list(state_dict_pretrained.keys())[i]]
+        print(torch.equal(state_dict_custom[list(state_dict_custom.keys())[i]],
+                          state_dict_pretrained[list(state_dict_pretrained.keys())[i]]))
 
-    vgg16.load_state_dict(state_dict_custom, strict=True)
+    vgg16.load_state_dict(state_dict_custom)
 
-    print("Weights changed :", not torch.equal(before[list(before.keys())[2]], vgg16.state_dict()[list(vgg16.state_dict().keys())[2]]))
+    print("Weights changed :",
+          torch.equal(state_dict_pretrained[list(state_dict_pretrained.keys())[2]],
+                      vgg16.state_dict()[list(vgg16.state_dict().keys())[2]]))
+
+    return vgg16
+
+def train_svm(num_epochs):
+    transform = transforms.Compose([
+        transforms.Resize((244, 244)),
+        transforms.ToTensor()
+    ])
+
+    coco_dataset = CocoDetection(root='data/train2014', annFile='data/annotations/instances_train2014.json',
+                                 transform=transform)
+    dataloader = DataLoader(coco_dataset, batch_size=1, shuffle=True)
+
+    rcnn = RCNN(classes=80)
+    rcnn.eval()
+
+    optimizer = optim.SGD(rcnn.parameters(), lr=1e-3)
+    criterion = torch.nn.CrossEntropyLoss()
+
+    for epoch in range(num_epochs):
+        for images, targets in dataloader:
+            optimizer.zero_grad()
+
+            with torch.no_grad():
+                features = rcnn(images)
+
+            svm_outputs = rcnn.svm(features)
+
+            svm_targets = torch.tensor(targets)
+            svm_targets = F.one_hot(svm_targets, num_classes=80)
+
+            loss = criterion(svm_outputs, svm_targets)
+
+            loss.backward()
+            optimizer.step()
+
+            # Print loss or other training progress if needed
+            print(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {loss.item():.4f}')
+
+    print("Training finished!")
+
+    torch.save(rcnn.svm.state_dict(), 'svm_model.pth')
+
+if __name__ == '__main__':
+    _model = RCNN(classes=80)
+    _model.eval()
+
+    preprocess = transforms.Compose([
+        transforms.ToTensor(),
+    ])
+    input_tensor = preprocess(image)
+    input_tensor = input_tensor.unsqueeze(0)
+
+    train_svm(80)
