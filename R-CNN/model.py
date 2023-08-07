@@ -75,9 +75,9 @@ class VGG16(nn.Module):
         return x
 
 class SVM(nn.Module):
-    def __init__(self, features, classes):
+    def __init__(self, classes):
         super(SVM, self).__init__()
-        self.fc = nn.Linear(features, classes)
+        self.fc = nn.Linear(4096, classes)
 
         self.fc.register_forward_hook(add_hook())
 
@@ -88,7 +88,7 @@ class RCNN(nn.Module):
     def __init__(self, classes):
         super(RCNN, self).__init__()
         self.vgg = pretrained_custom_vgg16()
-        self.svm = SVM(self.vgg.features(torch.randn(1, 3, 244, 244)).view(1, -1).size(1), classes)
+        self.svm = SVM(classes)
 
     def forward(self, x):
         x = self.vgg(x)
@@ -117,16 +117,14 @@ def pretrained_custom_vgg16():
     for i in range(len(state_dict_custom.keys())):
         state_dict_custom[list(state_dict_custom.keys())[i]] = state_dict_pretrained[
             list(state_dict_pretrained.keys())[i]]
-        print(torch.equal(state_dict_custom[list(state_dict_custom.keys())[i]],
-                          state_dict_pretrained[list(state_dict_pretrained.keys())[i]]))
 
     vgg16.load_state_dict(state_dict_custom)
 
-    print("Weights changed :",
-          torch.equal(state_dict_pretrained[list(state_dict_pretrained.keys())[2]],
-                      vgg16.state_dict()[list(vgg16.state_dict().keys())[2]]))
+    # print("Weights changed :",
+    #       torch.equal(state_dict_pretrained[list(state_dict_pretrained.keys())[2]],
+    #                   vgg16.state_dict()[list(vgg16.state_dict().keys())[2]]))
 
-    return vgg16
+    return state_dict_custom
 
 def train_svm(num_epochs):
     transform = transforms.Compose([
@@ -138,35 +136,47 @@ def train_svm(num_epochs):
                                  transform=transform)
     dataloader = DataLoader(coco_dataset, batch_size=1, shuffle=True)
 
-    rcnn = RCNN(classes=80)
-    rcnn.eval()
+    vgg16 = VGG16()
+    vgg16.eval()
+    svm = SVM(91)
+    svm.train()
 
-    optimizer = optim.SGD(rcnn.parameters(), lr=1e-3)
-    criterion = torch.nn.CrossEntropyLoss()
+    optimizer = optim.SGD(svm.parameters(), lr=1e-3)
 
     for epoch in range(num_epochs):
         for images, targets in dataloader:
             optimizer.zero_grad()
 
             with torch.no_grad():
-                features = rcnn(images)
+                print("Images shape:", images.shape)
+                features = vgg16(images)
 
-            svm_outputs = rcnn.svm(features)
+            svm_outputs = svm(features)
 
-            svm_targets = torch.tensor(targets)
-            svm_targets = F.one_hot(svm_targets, num_classes=80)
+            svm_targets = torch.tensor([target['category_id'] for target in targets])
+            print("SVM targets shape:", svm_targets.shape)
 
-            loss = criterion(svm_outputs, svm_targets)
+            valid_batch_indices = torch.arange(images.size(0))
+            print("Valid batch indices:", valid_batch_indices)
+
+            svm_outputs = svm_outputs
+            svm_targets = svm_targets
+
+            print("Target :", svm_targets)
+            print("Output :", svm_outputs.shape)
+
+            svm_targets = svm_targets.long()
+
+            loss = F.cross_entropy(svm_outputs, svm_targets)
 
             loss.backward()
             optimizer.step()
 
-            # Print loss or other training progress if needed
             print(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {loss.item():.4f}')
 
     print("Training finished!")
 
-    torch.save(rcnn.svm.state_dict(), 'svm_model.pth')
+    torch.save(svm.state_dict(), 'svm_model.pth')
 
 if __name__ == '__main__':
     _model = RCNN(classes=80)
