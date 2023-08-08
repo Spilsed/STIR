@@ -1,16 +1,22 @@
+import time
+
+import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import cv2
 import torchvision
 from torchvision import transforms
-from torchvision.datasets import CocoDetection
+from torchvision.datasets import VOCDetection
 from torch.utils.data import DataLoader
+from torchvision.transforms.functional import to_pil_image
 import torch.nn.functional as F
+import numpy as np
+from PIL import Image
 
 
-image = cv2.imread("img.png")
-resized = cv2.resize(image, (224, 244))
+#image = cv2.imread("img.png")
+#resized = cv2.resize(image, (224, 244))
 
 # ss = cv2.ximgproc.segmentation.createSelectiveSearchSegmentation()
 # ss.setBaseImage(image)
@@ -96,7 +102,8 @@ class RCNN(nn.Module):
 
 def add_hook():
     def size_hook(_model, _input, output):
-        print("Output Shape :", list(output.shape))
+        pass
+        #print("Output Shape :", list(output.shape))
     return size_hook
 
 def test_rcnn():
@@ -120,72 +127,95 @@ def pretrained_custom_vgg16():
 
     vgg16.load_state_dict(state_dict_custom)
 
-    # print("Weights changed :",
-    #       torch.equal(state_dict_pretrained[list(state_dict_pretrained.keys())[2]],
-    #                   vgg16.state_dict()[list(vgg16.state_dict().keys())[2]]))
-
     return state_dict_custom
 
-def train_svm(num_epochs):
-    transform = transforms.Compose([
-        transforms.Resize((244, 244)),
-        transforms.ToTensor()
-    ])
+def name_to_label(name):
+    labels = ["background", "aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "car", "cat", "chair", "cow",
+              "diningtable", "dog", "horse", "motorbike", "person", "pottedplant", "sheep", "sofa", "train",
+              "tvmonitor"]
+    return labels.index(name)
 
-    coco_dataset = CocoDetection(root='data/train2014', annFile='data/annotations/instances_train2014.json',
-                                 transform=transform)
-    dataloader = DataLoader(coco_dataset, batch_size=1, shuffle=True)
+def label_to_name(label):
+    labels = ["background", "aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "car", "cat", "chair", "cow",
+              "diningtable", "dog", "horse", "motorbike", "person", "pottedplant", "sheep", "sofa", "train",
+              "tvmonitor"]
+    return labels[label]
 
-    vgg16 = VGG16()
-    vgg16.eval()
-    svm = SVM(91)
+def get_image_box(image, box):
+    roi = np.asarray(image)[box[3]:box[2], box[1]:box[0]]
+    return Image.fromarray(roi)
+
+def train_svm(vgg, svm, dataloader, optimizer, num_epochs):
+    vgg.eval()
     svm.train()
 
-    optimizer = optim.SGD(svm.parameters(), lr=1e-3)
-
     for epoch in range(num_epochs):
-        for images, targets in dataloader:
+        print(f"Epoch {epoch + 1}/{num_epochs}")
+        for image, annotation in dataloader:
             optimizer.zero_grad()
+            features = []
+            labels = []
+            boxes = []
 
-            with torch.no_grad():
-                print("Images shape:", images.shape)
-                features = vgg16(images)
+            for object in annotation["annotation"]["object"]:
+                labels.append(name_to_label(object["name"][0]))
+                boxes.append([int(object["bndbox"]["xmax"][0]), int(object["bndbox"]["xmin"][0]), int(object["bndbox"]["ymax"][0]), int(object["bndbox"]["ymin"][0])])
 
-            svm_outputs = svm(features)
+            image = image.squeeze()
 
-            svm_targets = torch.tensor([target['category_id'] for target in targets])
-            print("SVM targets shape:", svm_targets.shape)
+            image = to_pil_image(image)
 
-            valid_batch_indices = torch.arange(images.size(0))
-            print("Valid batch indices:", valid_batch_indices)
+            preprocess = transforms.Compose([
+                transforms.ToTensor(),
+                transforms.Resize((244, 244))
+            ])
 
-            svm_outputs = svm_outputs
-            svm_targets = svm_targets
+            plt.imshow(image)
+            plt.title("Full Image")
+            plt.show()
 
-            print("Target :", svm_targets)
-            print("Output :", svm_outputs.shape)
+            i = 0
+            for box in boxes:
+                image_box = get_image_box(image, box)
+                image_box = preprocess(image_box).unsqueeze(0)
+                plt.imshow(to_pil_image(image_box.squeeze()))
+                plt.title(label_to_name(labels[i]))
+                plt.show()
+                feature = vgg(image_box)
+                features.append(feature)
+                i += 1
 
-            svm_targets = svm_targets.long()
+            features = torch.cat(features, dim=0)
+            labels = torch.tensor(labels)
 
-            loss = F.cross_entropy(svm_outputs, svm_targets)
-
+            outputs = svm(features)
+            loss = F.cross_entropy(outputs, labels)
             loss.backward()
             optimizer.step()
 
-            print(f'Epoch [{epoch + 1}/{num_epochs}], Loss: {loss.item():.4f}')
+            print(f"Loss: {loss.item():.4f}")
 
-    print("Training finished!")
 
-    torch.save(svm.state_dict(), 'svm_model.pth')
+def main():
+    model = RCNN(classes=20)
+    model.eval()
 
-if __name__ == '__main__':
-    _model = RCNN(classes=80)
-    _model.eval()
-
-    preprocess = transforms.Compose([
-        transforms.ToTensor(),
+    transform = transforms.Compose([
+        transforms.ToTensor()
     ])
-    input_tensor = preprocess(image)
-    input_tensor = input_tensor.unsqueeze(0)
 
-    train_svm(80)
+    voc_dataset = VOCDetection(root="../VOC2012", year="2012", image_set="train", download=False,
+                               transform=transform)
+    dataloader = DataLoader(voc_dataset, batch_size=1, shuffle=True)
+    optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+
+    vgg = VGG16()
+    svm = SVM(20)
+
+    vgg.load_state_dict(pretrained_custom_vgg16())
+
+    train_svm(vgg, svm, dataloader, optimizer, num_epochs=5)
+
+if __name__ == "__main__":
+    main()
+
