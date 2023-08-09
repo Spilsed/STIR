@@ -197,8 +197,11 @@ def train_svm(vgg, svm, dataloader, optimizer, num_epochs):
 
 
 def main():
-    model = RCNN(classes=20)
-    model.eval()
+    # model = RCNN(classes=21)
+    # model.eval()
+
+    vgg = VGG16()
+    svm = SVM(21)
 
     transform = transforms.Compose([
         transforms.ToTensor()
@@ -206,11 +209,8 @@ def main():
 
     voc_dataset = VOCDetection(root="../VOC2012", year="2012", image_set="train", download=False,
                                transform=transform)
-    dataloader = DataLoader(voc_dataset, batch_size=1, shuffle=True)
-    optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
-
-    vgg = VGG16()
-    svm = SVM(20)
+    dataloader = DataLoader(voc_dataset, batch_size=2, shuffle=True)
+    optimizer = optim.SGD(svm.parameters(), lr=0.001, momentum=0.9)
 
     vgg.load_state_dict(pretrained_custom_vgg16())
 
@@ -218,4 +218,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
