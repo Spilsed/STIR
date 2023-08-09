@@ -1,0 +1,12 @@
+dependencies:
+  - conda-ecosystem-user-package-isolation==1.0
+  - cudatoolkit=11.7.0
+  - python=3.9.16
+  - pip=23.2
+  - pip:
+    - torch==2.0.1
+    - torchvision==0.15.2
+    - numpy==1.25.2
+    - Pillow==10.0.0
+    - opencv-python-headless==4.8.0.74
+    - matplotlib==3.7.2
