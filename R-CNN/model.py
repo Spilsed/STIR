@@ -156,7 +156,9 @@ def get_image_box(image, box):
     return Image.fromarray(roi)
 
 def train_svm(vgg, svm, dataloader, optimizer, num_epochs):
-    vgg.eval()
+    for param in vgg.parameters():
+        param.requires_grad = False
+
     svm.train()
 
     for epoch in range(num_epochs):
@@ -187,7 +189,7 @@ def main():
 
     preprocess = transforms.Compose([
         transforms.ToTensor(),
-        transforms.Resize((244, 244))
+        transforms.Resize((244, 244)),
     ])
 
     def transform(image, annotations):
