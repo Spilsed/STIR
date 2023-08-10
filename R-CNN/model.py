@@ -15,8 +15,8 @@ import numpy as np
 from PIL import Image
 
 
-#image = cv2.imread("img.png")
-#resized = cv2.resize(image, (224, 244))
+# image = cv2.imread("img.png")
+# resized = cv2.resize(image, (224, 244))
 
 # ss = cv2.ximgproc.segmentation.createSelectiveSearchSegmentation()
 # ss.setBaseImage(image)
@@ -37,6 +37,7 @@ class VGGBlock(nn.Module):
     def forward(self, x):
         return self.block(x)
 
+
 class VGG16(nn.Module):
     def __init__(self):
         super(VGG16, self).__init__()
@@ -54,7 +55,7 @@ class VGG16(nn.Module):
         self.flatten = nn.Flatten()
 
         self.classifier = nn.Sequential(
-            nn.Linear(512*49, 4096),
+            nn.Linear(512 * 49, 4096),
             nn.ReLU(inplace=True),
             nn.Dropout(),
             nn.Linear(4096, 4096),
@@ -80,6 +81,7 @@ class VGG16(nn.Module):
         x = self.classifier(x)
         return x
 
+
 class SVM(nn.Module):
     def __init__(self, classes):
         super(SVM, self).__init__()
@@ -89,6 +91,7 @@ class SVM(nn.Module):
 
     def forward(self, x):
         return self.fc(x)
+
 
 class RCNN(nn.Module):
     def __init__(self, classes):
@@ -100,16 +103,20 @@ class RCNN(nn.Module):
         x = self.vgg(x)
         return self.svm(x)
 
+
 def add_hook():
     def size_hook(_model, _input, output):
         pass
-        #print("Output Shape :", list(output.shape))
+        # print("Output Shape :", list(output.shape))
+
     return size_hook
+
 
 def test_rcnn():
     model = VGG16()
     model.eval()
     model(torch.randn(1, 3, 244, 244))
+
 
 def pretrained_custom_vgg16():
     vgg16 = VGG16()
@@ -129,17 +136,20 @@ def pretrained_custom_vgg16():
 
     return state_dict_custom
 
+
 def name_to_label(name):
     labels = ["background", "aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "car", "cat", "chair", "cow",
               "diningtable", "dog", "horse", "motorbike", "person", "pottedplant", "sheep", "sofa", "train",
               "tvmonitor"]
     return labels.index(name)
 
+
 def label_to_name(label):
     labels = ["background", "aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "car", "cat", "chair", "cow",
               "diningtable", "dog", "horse", "motorbike", "person", "pottedplant", "sheep", "sofa", "train",
               "tvmonitor"]
     return labels[label]
+
 
 def get_image_box(image, box):
     roi = np.asarray(image)[box[3]:box[2], box[1]:box[0]]
@@ -151,42 +161,15 @@ def train_svm(vgg, svm, dataloader, optimizer, num_epochs):
 
     for epoch in range(num_epochs):
         print(f"Epoch {epoch + 1}/{num_epochs}")
-        for image, annotation in dataloader:
+        for batch_idx, (images, labels) in enumerate(dataloader):
             optimizer.zero_grad()
+
             features = []
-            labels = []
-            boxes = []
 
-            for object in annotation["annotation"]["object"]:
-                labels.append(name_to_label(object["name"][0]))
-                boxes.append([int(object["bndbox"]["xmax"][0]), int(object["bndbox"]["xmin"][0]), int(object["bndbox"]["ymax"][0]), int(object["bndbox"]["ymin"][0])])
-
-            image = image.squeeze()
-
-            image = to_pil_image(image)
-
-            preprocess = transforms.Compose([
-                transforms.ToTensor(),
-                transforms.Resize((244, 244))
-            ])
-
-            plt.imshow(image)
-            plt.title("Full Image")
-            plt.show()
-
-            i = 0
-            for box in boxes:
-                image_box = get_image_box(image, box)
-                image_box = preprocess(image_box).unsqueeze(0)
-                plt.imshow(to_pil_image(image_box.squeeze()))
-                plt.title(label_to_name(labels[i]))
-                plt.show()
-                feature = vgg(image_box)
-                features.append(feature)
-                i += 1
+            feature = vgg(images)
+            features.append(feature)
 
             features = torch.cat(features, dim=0)
-            labels = torch.tensor(labels)
 
             outputs = svm(features)
             loss = F.cross_entropy(outputs, labels)
@@ -195,26 +178,40 @@ def train_svm(vgg, svm, dataloader, optimizer, num_epochs):
 
             print(f"Loss: {loss.item():.4f}")
 
+    return svm
+
 
 def main():
-    # model = RCNN(classes=21)
-    # model.eval()
-
     vgg = VGG16()
     svm = SVM(21)
 
-    transform = transforms.Compose([
-        transforms.ToTensor()
+    preprocess = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Resize((244, 244))
     ])
 
+    def transform(image, annotations):
+        label = name_to_label(annotations["annotation"]["object"][0]["name"])
+
+        # Temp until annotation padding
+        annotations = [annotations["annotation"]["object"][0]]
+
+        for obj in annotations:
+            image = get_image_box(image, [int(obj["bndbox"]["xmax"]), int(obj["bndbox"]["xmin"]), int(obj["bndbox"]["ymax"]), int(obj["bndbox"]["ymin"])])
+            image = preprocess(image)
+
+        return image, label
+
     voc_dataset = VOCDetection(root="../VOC2012", year="2012", image_set="train", download=False,
-                               transform=transform)
-    dataloader = DataLoader(voc_dataset, batch_size=2, shuffle=True)
+                               transforms=transform)
+
+    dataloader = DataLoader(voc_dataset, batch_size=32, shuffle=True)
     optimizer = optim.SGD(svm.parameters(), lr=0.001, momentum=0.9)
 
     vgg.load_state_dict(pretrained_custom_vgg16())
 
-    train_svm(vgg, svm, dataloader, optimizer, num_epochs=5)
+    svm = train_svm(vgg, svm, dataloader, optimizer, num_epochs=5)
+
 
 if __name__ == "__main__":
     main()
