@@ -1,5 +1,5 @@
+import random
 import time
-
 import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
@@ -17,10 +17,6 @@ from PIL import Image
 
 # image = cv2.imread("img.png")
 # resized = cv2.resize(image, (224, 244))
-
-# ss = cv2.ximgproc.segmentation.createSelectiveSearchSegmentation()
-# ss.setBaseImage(image)
-# ss.switchToSelectiveSearchFast()
 
 class VGGBlock(nn.Module):
     def __init__(self, input, output, num_conv):
@@ -141,7 +137,7 @@ def name_to_label(name):
     labels = ["background", "aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "car", "cat", "chair", "cow",
               "diningtable", "dog", "horse", "motorbike", "person", "pottedplant", "sheep", "sofa", "train",
               "tvmonitor"]
-    return labels.index(name)
+    return float(labels.index(name))
 
 
 def label_to_name(label):
@@ -155,6 +151,7 @@ def get_image_box(image, box):
     roi = np.asarray(image)[box[3]:box[2], box[1]:box[0]]
     return Image.fromarray(roi)
 
+
 def train_svm(vgg, svm, dataloader, optimizer, num_epochs):
     for param in vgg.parameters():
         param.requires_grad = False
@@ -166,22 +163,52 @@ def train_svm(vgg, svm, dataloader, optimizer, num_epochs):
         for batch_idx, (images, labels) in enumerate(dataloader):
             optimizer.zero_grad()
 
-            features = []
+            for i in range(len(images)):
+                features = []
 
-            feature = vgg(images)
-            features.append(feature)
+                feature = vgg(images[i])
+                features.append(feature)
 
-            features = torch.cat(features, dim=0)
+                features = torch.cat(features, dim=0)
 
-            outputs = svm(features)
-            loss = F.cross_entropy(outputs, labels)
-            loss.backward()
+                outputs = svm(features)
+                print(outputs.shape)
+                print(labels[i].shape)
+                loss = F.cross_entropy(outputs, labels[i].long())
+                loss.backward()
             optimizer.step()
 
             print(f"Loss: {loss.item():.4f}")
 
     return svm
 
+
+def intersection_over_union(boxA, boxB):
+    # determine the (x, y)-coordinates of the intersection rectangle
+    xA = max(boxA[0], boxB[0])
+    yA = max(boxA[1], boxB[1])
+    xB = min(boxA[2], boxB[2])
+    yB = min(boxA[3], boxB[3])
+    # compute the area of intersection rectangle
+    interArea = max(0, xB - xA + 1) * max(0, yB - yA + 1)
+    # compute the area of both the prediction and ground-truth
+    # rectangles
+    boxAArea = (boxA[2] - boxA[0] + 1) * (boxA[3] - boxA[1] + 1)
+    boxBArea = (boxB[2] - boxB[0] + 1) * (boxB[3] - boxB[1] + 1)
+    # compute the intersection over union by taking the intersection
+    # area and dividing it by the sum of prediction + ground-truth
+    # areas - the interesection area
+    if float(boxAArea + boxBArea - interArea) != 0:
+        iou = interArea / float(boxAArea + boxBArea - interArea)
+        return iou
+    else:
+        return 1.0
+
+def cv_rect_to_pil_rect(cv_rect):
+    pil_rect = [cv_rect[2] + cv_rect[0], cv_rect[0], cv_rect[3] + cv_rect[1], cv_rect[1]]
+    return pil_rect
+
+prev_return = []
 
 def main():
     vgg = VGG16()
@@ -192,17 +219,84 @@ def main():
         transforms.Resize((244, 244)),
     ])
 
-    def transform(image, annotations):
-        label = name_to_label(annotations["annotation"]["object"][0]["name"])
+    ss = cv2.ximgproc.segmentation.createSelectiveSearchSegmentation()
 
-        # Temp until annotation padding
-        annotations = [annotations["annotation"]["object"][0]]
+    def transform(image, annotations):
+        global prev_return
+
+        original_image = image.copy()
+        image = np.array(image)
+        image = image[:, :, ::-1]
+        ss.setBaseImage(image)
+        ss.switchToSelectiveSearchFast()
+        rects = ss.process()
+        g_rects = []
+
+        # for i in range(0, len(rects), 100):
+        #     output = image.copy()
+        #     for (x, y, w, h) in rects[i:i + 100]:
+        #         color = [random.randint(0, 255) for j in range(0, 3)]
+        #         cv2.rectangle(output, (x, y), (x + w, y + h), color, 2)
+        #     cv2.imshow("Output", output)
+        #     cv2.waitKey(0)
+
+        annotations = annotations["annotation"]["object"]
 
         for obj in annotations:
-            image = get_image_box(image, [int(obj["bndbox"]["xmax"]), int(obj["bndbox"]["xmin"]), int(obj["bndbox"]["ymax"]), int(obj["bndbox"]["ymin"])])
-            image = preprocess(image)
+            g_rects.append([[int(obj["bndbox"]["xmin"]),
+                             int(obj["bndbox"]["ymin"]),
+                             int(obj["bndbox"]["xmax"]) - int(obj["bndbox"]["xmin"]),
+                             int(obj["bndbox"]["ymax"]) - int(obj["bndbox"]["ymin"])],
+                            name_to_label(obj["name"])])
 
-        return image, label
+        positive = []
+        negative = []
+
+        for rect in rects:
+            for g_rect in g_rects:
+                iou = intersection_over_union(rect, g_rect[0])
+                if iou > 0.5:
+                    positive.append([rect, g_rect[1]])
+
+                    # output = image.copy()
+                    # cv2.rectangle(output, (rect[0], rect[1]), (rect[0] + rect[2], rect[1] + rect[3]), [0, 0, 255], 2)
+                    # cv2.rectangle(output, (g_rect[0][0], g_rect[0][1]), (g_rect[0][0] + g_rect[0][2], g_rect[0][1] + g_rect[0][3]), [0, 255, 0], 2)
+                    # print("POSITIVE :", iou)
+                    # cv2.imshow("Output", output)
+                    # cv2.waitKey(0)
+
+                else:
+                    negative.append([rect, g_rect[1]])
+
+        final_rects = []
+        labels = []
+
+        print("POSITIVE :", len(positive))
+        if len(positive) == 0 and len(prev_return) == 2:
+            return prev_return[0], prev_return[1]
+
+        for i in range(32):
+            sample = random.sample(positive, 1)[0]
+            plt.imshow(get_image_box(original_image, cv_rect_to_pil_rect(sample[0])))
+            #plt.show()
+            final_rects.append(preprocess(get_image_box(original_image, cv_rect_to_pil_rect(sample[0]))))
+            labels.append(sample[1])
+
+        for i in range(96):
+            sample = random.sample(negative, 1)[0]
+            final_rects.append(preprocess(get_image_box(original_image, cv_rect_to_pil_rect(sample[0]))))
+            labels.append(0.0)
+
+        temp = list(zip(final_rects, labels))
+        random.shuffle(temp)
+        res1, res2 = zip(*temp)
+        final_rects, labels = list(res1), list(res2)
+
+        final_rects = torch.tensor(np.asarray(final_rects))
+        labels = torch.tensor(np.asarray(labels))
+
+        prev_return = [final_rects, labels]
+        return final_rects, labels
 
     voc_dataset = VOCDetection(root="../VOC2012", year="2012", image_set="train", download=False,
                                transforms=transform)
