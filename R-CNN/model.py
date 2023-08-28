@@ -182,27 +182,19 @@ def train_svm(vgg, svm, dataloader, optimizer, num_epochs):
 
     return svm
 
-
 def intersection_over_union(boxA, boxB):
-    # determine the (x, y)-coordinates of the intersection rectangle
     xA = max(boxA[0], boxB[0])
     yA = max(boxA[1], boxB[1])
     xB = min(boxA[2], boxB[2])
     yB = min(boxA[3], boxB[3])
-    # compute the area of intersection rectangle
+
     interArea = max(0, xB - xA + 1) * max(0, yB - yA + 1)
-    # compute the area of both the prediction and ground-truth
-    # rectangles
+
     boxAArea = (boxA[2] - boxA[0] + 1) * (boxA[3] - boxA[1] + 1)
     boxBArea = (boxB[2] - boxB[0] + 1) * (boxB[3] - boxB[1] + 1)
-    # compute the intersection over union by taking the intersection
-    # area and dividing it by the sum of prediction + ground-truth
-    # areas - the interesection area
-    if float(boxAArea + boxBArea - interArea) != 0:
-        iou = interArea / float(boxAArea + boxBArea - interArea)
-        return iou
-    else:
-        return 1.0
+
+    iou = interArea / float(boxAArea + boxBArea - interArea)
+    return iou
 
 def cv_rect_to_pil_rect(cv_rect):
     pil_rect = [cv_rect[2] + cv_rect[0], cv_rect[0], cv_rect[3] + cv_rect[1], cv_rect[1]]
@@ -245,22 +237,24 @@ def main():
         for obj in annotations:
             g_rects.append([[int(obj["bndbox"]["xmin"]),
                              int(obj["bndbox"]["ymin"]),
-                             int(obj["bndbox"]["xmax"]) - int(obj["bndbox"]["xmin"]),
-                             int(obj["bndbox"]["ymax"]) - int(obj["bndbox"]["ymin"])],
+                             int(obj["bndbox"]["xmax"]),
+                             int(obj["bndbox"]["ymax"])],
                             name_to_label(obj["name"])])
 
         positive = []
         negative = []
 
         for rect in rects:
+            rect = [rect[0], rect[1], rect[0] + rect[2], rect[1] + rect[3]]
+
             for g_rect in g_rects:
-                iou = intersection_over_union(rect, g_rect[0])
+                iou = intersection_over_union(g_rect[0], rect)
                 if iou > 0.5:
                     positive.append([rect, g_rect[1]])
 
                     # output = image.copy()
-                    # cv2.rectangle(output, (rect[0], rect[1]), (rect[0] + rect[2], rect[1] + rect[3]), [0, 0, 255], 2)
-                    # cv2.rectangle(output, (g_rect[0][0], g_rect[0][1]), (g_rect[0][0] + g_rect[0][2], g_rect[0][1] + g_rect[0][3]), [0, 255, 0], 2)
+                    # cv2.rectangle(output, (rect[0], rect[1]), (rect[2], rect[3]), [0, 0, 255], 2)
+                    # cv2.rectangle(output, (g_rect[0][0], g_rect[0][1]), (g_rect[0][2], g_rect[0][3]), [0, 255, 0], 2)
                     # print("POSITIVE :", iou)
                     # cv2.imshow("Output", output)
                     # cv2.waitKey(0)
@@ -268,11 +262,18 @@ def main():
                 else:
                     negative.append([rect, g_rect[1]])
 
+                    # output = image.copy()
+                    # cv2.rectangle(output, (rect[0], rect[1]), (rect[2], rect[3]), [0, 0, 255], 2)
+                    # cv2.rectangle(output, (g_rect[0][0], g_rect[0][1]), (g_rect[0][2], g_rect[0][3]), [0, 255, 0], 2)
+                    # print("NEGATIVE :", iou)
+                    # cv2.imshow("Output", output)
+                    # cv2.waitKey(0)
+
         final_rects = []
         labels = []
 
         print("POSITIVE :", len(positive))
-        if len(positive) == 0 and len(prev_return) == 2:
+        if len(positive) == 0 and len(prev_return) > 0:
             return prev_return[0], prev_return[1]
 
         for i in range(32):
