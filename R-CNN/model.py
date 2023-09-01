@@ -1,5 +1,4 @@
 import random
-import time
 import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
@@ -9,7 +8,6 @@ import torchvision
 from torchvision import transforms
 from torchvision.datasets import VOCDetection
 from torch.utils.data import DataLoader
-from torchvision.transforms.functional import to_pil_image
 import torch.nn.functional as F
 import numpy as np
 from PIL import Image
@@ -158,6 +156,8 @@ def train_svm(vgg, svm, dataloader, optimizer, num_epochs):
 
     svm.train()
 
+    losses = []
+
     for epoch in range(num_epochs):
         print(f"Epoch {epoch + 1}/{num_epochs}")
         for batch_idx, (images, labels) in enumerate(dataloader):
@@ -169,6 +169,8 @@ def train_svm(vgg, svm, dataloader, optimizer, num_epochs):
                 feature = vgg(images[i])
                 features.append(feature)
 
+                print(feature.dtype)
+
                 features = torch.cat(features, dim=0)
 
                 outputs = svm(features)
@@ -178,7 +180,11 @@ def train_svm(vgg, svm, dataloader, optimizer, num_epochs):
                 loss.backward()
             optimizer.step()
 
+            losses.append(loss)
             print(f"Loss: {loss.item():.4f}")
+
+    plt.plot(losses)
+    plt.show
 
     return svm
 
@@ -208,7 +214,7 @@ def main():
 
     preprocess = transforms.Compose([
         transforms.ToTensor(),
-        transforms.Resize((244, 244)),
+        transforms.Resize((244, 244), antialias=True),
     ])
 
     ss = cv2.ximgproc.segmentation.createSelectiveSearchSegmentation()
@@ -220,7 +226,7 @@ def main():
         image = np.array(image)
         image = image[:, :, ::-1]
         ss.setBaseImage(image)
-        ss.switchToSelectiveSearchFast()
+        ss.switchToSelectiveSearchQuality()
         rects = ss.process()
         g_rects = []
 
@@ -302,7 +308,7 @@ def main():
     voc_dataset = VOCDetection(root="../VOC2012", year="2012", image_set="train", download=False,
                                transforms=transform)
 
-    dataloader = DataLoader(voc_dataset, batch_size=32, shuffle=True)
+    dataloader = DataLoader(voc_dataset, batch_size=1, shuffle=True)
     optimizer = optim.SGD(svm.parameters(), lr=0.001, momentum=0.9)
 
     vgg.load_state_dict(pretrained_custom_vgg16())
@@ -311,4 +317,6 @@ def main():
 
 
 if __name__ == "__main__":
+    torch.device("cuda")
+
     main()
