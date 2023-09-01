@@ -1,4 +1,6 @@
+import os
 import random
+
 import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
@@ -12,6 +14,7 @@ import torch.nn.functional as F
 import numpy as np
 from PIL import Image
 import clip
+import hashlib
 
 
 class VGGBlock(nn.Module):
@@ -229,22 +232,29 @@ def main():
     def transform(image, annotations):
         global prev_return
 
+        image_hash = hashlib.md5(image.tobytes("hex", "rgb")).hexdigest()
         original_image = image.copy()
-        image = np.array(image)
-        image = image[:, :, ::-1]
-        ss.setBaseImage(image)
-        ss.switchToSelectiveSearchQuality()
-        rects = ss.process()
+
+        if image_hash not in os.listdir("./cache"):
+            image = np.array(image)
+            image = image[:, :, ::-1]
+            ss.setBaseImage(image)
+            ss.switchToSelectiveSearchQuality()
+            rects = ss.process()
+            with open("./cache/" + image_hash, "a") as f:
+                for rect in rects:
+                    for point in rect:
+                        f.write(str(point) + ",")
+                    f.write("\n")
+        else:
+            final_rect = []
+            rects = open("./cache/" + image_hash, "r").read().split("\n")
+            for rect in rects:
+                final_rect.append(rect.split(",")[:-1])
+                final_rect[-1] = [int(i) for i in final_rect[-1]]
+            rects = final_rect[:-1]
+
         g_rects = []
-
-        # for i in range(0, len(rects), 100):
-        #     output = image.copy()
-        #     for (x, y, w, h) in rects[i:i + 100]:
-        #         color = [random.randint(0, 255) for j in range(0, 3)]
-        #         cv2.rectangle(output, (x, y), (x + w, y + h), color, 2)
-        #     cv2.imshow("Output", output)
-        #     cv2.waitKey(0)
-
         annotations = annotations["annotation"]["object"]
 
         for obj in annotations:
@@ -290,10 +300,10 @@ def main():
             return prev_return[0], prev_return[1]
 
         for i in range(32):
-            random_index = random.randint(0, len(positive)-1)
+            random_index = random.randint(0, len(positive) - 1)
             sample = positive[random_index]
             if len(positive) > 0:
-                positive.remove(random_index)
+                del positive[random_index]
 
             plt.imshow(get_image_box(original_image, cv_rect_to_pil_rect(sample[0])))
             # plt.show()
@@ -304,7 +314,7 @@ def main():
             random_index = random.randint(0, len(negative) - 1)
             sample = negative[random_index]
             if len(negative) != 0:
-                negative.remove(random_index)
+                del negative[random_index]
             final_rects.append(preprocess(get_image_box(original_image, cv_rect_to_pil_rect(sample[0]))))
             labels.append(0.0)
 
@@ -322,7 +332,7 @@ def main():
     voc_dataset = VOCDetection(root="../VOC2012", year="2012", image_set="train", download=False,
                                transforms=transform)
 
-    dataloader = DataLoader(voc_dataset, batch_size=1, shuffle=True)
+    dataloader = DataLoader(voc_dataset, batch_size=1, shuffle=False)
     optimizer = optim.SGD(svm.parameters(), lr=0.001, momentum=0.9)
 
     vgg.load_state_dict(pretrained_custom_vgg16())
