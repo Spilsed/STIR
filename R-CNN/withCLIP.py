@@ -175,13 +175,8 @@ def train_svm(vgg, svm, dataloader, optimizer, num_epochs):
 
                 features = torch.cat(features, dim=0)
 
-                print(feature.shape)
-                print(feature.dtype)
-
                 svm.cuda()
                 outputs = svm(features)
-                print(outputs.shape)
-                print(labels[i].shape)
                 loss = F.cross_entropy(outputs.cuda(), labels[i].long().cuda())
                 loss.backward()
             optimizer.step()
@@ -300,9 +295,13 @@ def main():
             return prev_return[0], prev_return[1]
 
         for i in range(32):
-            random_index = random.randint(0, len(positive) - 1)
+            if len(positive) != 1:
+                random_index = random.randint(0, len(positive) - 1)
+            else:
+                random_index = 0
+
             sample = positive[random_index]
-            if len(positive) > 0:
+            if len(positive) > 1:
                 del positive[random_index]
 
             plt.imshow(get_image_box(original_image, cv_rect_to_pil_rect(sample[0])))
@@ -311,9 +310,13 @@ def main():
             labels.append(sample[1])
 
         for i in range(96):
-            random_index = random.randint(0, len(negative) - 1)
+            if len(negative) != 1:
+                random_index = random.randint(0, len(negative) - 1)
+            else:
+                random_index = 0
+
             sample = negative[random_index]
-            if len(negative) != 0:
+            if len(negative) > 1:
                 del negative[random_index]
             final_rects.append(preprocess(get_image_box(original_image, cv_rect_to_pil_rect(sample[0]))))
             labels.append(0.0)
@@ -332,7 +335,7 @@ def main():
     voc_dataset = VOCDetection(root="../VOC2012", year="2012", image_set="train", download=False,
                                transforms=transform)
 
-    dataloader = DataLoader(voc_dataset, batch_size=1, shuffle=False)
+    dataloader = DataLoader(voc_dataset, batch_size=32, shuffle=True)
     optimizer = optim.SGD(svm.parameters(), lr=0.001, momentum=0.9)
 
     vgg.load_state_dict(pretrained_custom_vgg16())
