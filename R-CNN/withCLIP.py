@@ -1,5 +1,6 @@
 import os
 import random
+from datetime import datetime
 
 import matplotlib.pyplot as plt
 import torch
@@ -16,6 +17,7 @@ from PIL import Image
 import clip
 import hashlib
 
+from tqdm import tqdm
 
 class VGGBlock(nn.Module):
     def __init__(self, input, output, num_conv):
@@ -151,11 +153,10 @@ def get_image_box(image, box):
     return Image.fromarray(roi)
 
 
-def train_svm(vgg, svm, dataloader, optimizer, num_epochs):
-    model, preprocess = clip.load("ViT-B/32", device="cuda")
+def train_svm(svm, dataloader, optimizer, num_epochs):
+    start_time = str(datetime.timestamp(datetime.now()) * 1000)
 
-    for param in vgg.parameters():
-        param.requires_grad = False
+    model, preprocess = clip.load("ViT-B/32", device="cuda")
 
     losses = []
 
@@ -163,13 +164,15 @@ def train_svm(vgg, svm, dataloader, optimizer, num_epochs):
 
     for epoch in range(num_epochs):
         print(f"Epoch {epoch + 1}/{num_epochs}")
-        for batch_idx, (images, labels) in enumerate(dataloader):
+
+        for batch_idx, (images, labels) in tqdm(enumerate(dataloader)):
+            zero_grad = datetime.now()
             optimizer.zero_grad()
 
+            features_start = datetime.now()
             for i in range(len(images)):
                 features = []
 
-                # processed_image = preprocess(images[i]).unsqueeze(0)
                 feature = model.encode_image(images[i].cuda()).to(torch.float32)
                 features.append(feature)
 
@@ -179,9 +182,16 @@ def train_svm(vgg, svm, dataloader, optimizer, num_epochs):
                 outputs = svm(features)
                 loss = F.cross_entropy(outputs.cuda(), labels[i].long().cuda())
                 loss.backward()
-            optimizer.step()
 
-            losses.append(loss)
+            optimizer_step = datetime.now()
+            optimizer.step()
+            losses.append(loss.item())
+
+            with open("WCLIP"+start_time+".txt", "w") as f:
+                f.write(str(losses))
+
+            print("Total : ", datetime.now() - zero_grad)
+
             print(f"Loss: {loss.item():.4f}")
 
     plt.plot(losses)
@@ -215,7 +225,7 @@ prev_return = []
 
 def main():
     vgg = VGG16()
-    svm = SVM(21)
+    svm = SVM(21).to(device)
 
     preprocess = transforms.Compose([
         transforms.ToTensor(),
@@ -269,28 +279,12 @@ def main():
                 iou = intersection_over_union(g_rect[0], rect)
                 if iou > 0.5:
                     positive.append([rect, g_rect[1]])
-
-                    # output = image.copy()
-                    # cv2.rectangle(output, (rect[0], rect[1]), (rect[2], rect[3]), [0, 0, 255], 2)
-                    # cv2.rectangle(output, (g_rect[0][0], g_rect[0][1]), (g_rect[0][2], g_rect[0][3]), [0, 255, 0], 2)
-                    # print("POSITIVE :", iou)
-                    # cv2.imshow("Output", output)
-                    # cv2.waitKey(0)
-
                 else:
                     negative.append([rect, g_rect[1]])
-
-                    # output = image.copy()
-                    # cv2.rectangle(output, (rect[0], rect[1]), (rect[2], rect[3]), [0, 0, 255], 2)
-                    # cv2.rectangle(output, (g_rect[0][0], g_rect[0][1]), (g_rect[0][2], g_rect[0][3]), [0, 255, 0], 2)
-                    # print("NEGATIVE :", iou)
-                    # cv2.imshow("Output", output)
-                    # cv2.waitKey(0)
 
         final_rects = []
         labels = []
 
-        print("POSITIVE :", len(positive))
         if len(positive) == 0 and len(prev_return) > 0:
             return prev_return[0], prev_return[1]
 
@@ -304,8 +298,6 @@ def main():
             if len(positive) > 1:
                 del positive[random_index]
 
-            plt.imshow(get_image_box(original_image, cv_rect_to_pil_rect(sample[0])))
-            # plt.show()
             final_rects.append(preprocess(get_image_box(original_image, cv_rect_to_pil_rect(sample[0]))))
             labels.append(sample[1])
 
@@ -335,16 +327,16 @@ def main():
     voc_dataset = VOCDetection(root="../VOC2012", year="2012", image_set="train", download=False,
                                transforms=transform)
 
-    dataloader = DataLoader(voc_dataset, batch_size=32, shuffle=True)
-    optimizer = optim.SGD(svm.parameters(), lr=0.001, momentum=0.9)
+    dataloader = DataLoader(voc_dataset, batch_size=32, shuffle=True, pin_memory=True)
 
-    vgg.load_state_dict(pretrained_custom_vgg16())
+    optimizer = optim.AdamW(svm.parameters(), lr=1e-4)
 
-    svm = train_svm(vgg, svm, dataloader, optimizer, num_epochs=5)
+    svm = train_svm(svm, dataloader, optimizer, num_epochs=5)
 
+    torch.save(svm.state_dict(), "./models/WCLIP_attempt" + str(len(os.listdir("./models"))))
 
 if __name__ == "__main__":
     if torch.cuda.is_available():
-        torch.device("cuda")
+        device = torch.device("cuda")
 
     main()

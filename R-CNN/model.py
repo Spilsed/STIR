@@ -1,4 +1,8 @@
+import datetime
+import os
 import random
+import time
+
 import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
@@ -11,6 +15,7 @@ from torch.utils.data import DataLoader
 import torch.nn.functional as F
 import numpy as np
 from PIL import Image
+import hashlib
 
 
 # image = cv2.imread("img.png")
@@ -151,6 +156,8 @@ def get_image_box(image, box):
 
 
 def train_svm(vgg, svm, dataloader, optimizer, num_epochs):
+    start_time = str(datetime.datetime.timestamp(datetime.datetime.now())*1000)
+
     for param in vgg.parameters():
         param.requires_grad = False
 
@@ -169,18 +176,18 @@ def train_svm(vgg, svm, dataloader, optimizer, num_epochs):
                 feature = vgg(images[i])
                 features.append(feature)
 
-                print(feature.dtype)
-
                 features = torch.cat(features, dim=0)
 
                 outputs = svm(features)
-                print(outputs.shape)
-                print(labels[i].shape)
                 loss = F.cross_entropy(outputs, labels[i].long())
                 loss.backward()
             optimizer.step()
 
-            losses.append(loss)
+            losses.append(loss.item())
+
+            with open("BASE_"+start_time+".txt", "w") as f:
+                f.write(str(losses))
+
             print(f"Loss: {loss.item():.4f}")
 
     plt.plot(losses)
@@ -209,8 +216,8 @@ def cv_rect_to_pil_rect(cv_rect):
 prev_return = []
 
 def main():
-    vgg = VGG16()
-    svm = SVM(21)
+    vgg = VGG16().to(device)
+    svm = SVM(21).to(device)
 
     preprocess = transforms.Compose([
         transforms.ToTensor(),
@@ -223,20 +230,28 @@ def main():
         global prev_return
 
         original_image = image.copy()
-        image = np.array(image)
-        image = image[:, :, ::-1]
-        ss.setBaseImage(image)
-        ss.switchToSelectiveSearchQuality()
-        rects = ss.process()
-        g_rects = []
+        image_hash = hashlib.md5(image.tobytes("hex", "rgb")).hexdigest()
 
-        # for i in range(0, len(rects), 100):
-        #     output = image.copy()
-        #     for (x, y, w, h) in rects[i:i + 100]:
-        #         color = [random.randint(0, 255) for j in range(0, 3)]
-        #         cv2.rectangle(output, (x, y), (x + w, y + h), color, 2)
-        #     cv2.imshow("Output", output)
-        #     cv2.waitKey(0)
+        if image_hash not in os.listdir("./cache"):
+            image = np.array(image)
+            image = image[:, :, ::-1]
+            ss.setBaseImage(image)
+            ss.switchToSelectiveSearchQuality()
+            rects = ss.process()
+            with open("./cache/" + image_hash, "a") as f:
+                for rect in rects:
+                    for point in rect:
+                        f.write(str(point) + ",")
+                    f.write("\n")
+        else:
+            final_rect = []
+            rects = open("./cache/" + image_hash, "r").read().split("\n")
+            for rect in rects:
+                final_rect.append(rect.split(",")[:-1])
+                final_rect[-1] = [int(i) for i in final_rect[-1]]
+            rects = final_rect[:-1]
+
+        g_rects = []
 
         annotations = annotations["annotation"]["object"]
 
@@ -308,15 +323,16 @@ def main():
     voc_dataset = VOCDetection(root="../VOC2012", year="2012", image_set="train", download=False,
                                transforms=transform)
 
-    dataloader = DataLoader(voc_dataset, batch_size=1, shuffle=True)
+    dataloader = DataLoader(voc_dataset, batch_size=32, shuffle=True)
     optimizer = optim.SGD(svm.parameters(), lr=0.001, momentum=0.9)
 
     vgg.load_state_dict(pretrained_custom_vgg16())
 
-    svm = train_svm(vgg, svm, dataloader, optimizer, num_epochs=5)
+    svm = train_svm(vgg, svm, dataloader, optimizer, num_epochs=1)
 
+    torch.save(svm.state_dict(), "./models/BASE_attempt"+str(len(os.listdir("./models"))))
 
 if __name__ == "__main__":
-    torch.device("cuda")
+    device = torch.device("cuda")
 
     main()
