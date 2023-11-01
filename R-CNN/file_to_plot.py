@@ -1,6 +1,6 @@
 import matplotlib.pyplot as plt
 
-with open("1693836841639.558.txt", "r") as f:
+with open("WCLIP1698540141304.1511_val.txt", "r") as f:
     text = f.read()
     points = text[1:-1].split(", ")
 
@@ -8,6 +8,6 @@ with open("1693836841639.558.txt", "r") as f:
         points[point] = float(points[point])
 
 
-    plt.title("R-CNN w/ CLIP")
+    plt.title("R-CNN w/ CLIP Validation")
     plt.plot(points)
     plt.show()

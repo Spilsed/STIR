@@ -1,5 +1,6 @@
 import os
 import random
+import statistics
 from datetime import datetime
 
 import matplotlib.pyplot as plt
@@ -16,8 +17,8 @@ import numpy as np
 from PIL import Image
 import clip
 import hashlib
-
 from tqdm import tqdm
+
 
 class VGGBlock(nn.Module):
     def __init__(self, input, output, num_conv):
@@ -153,12 +154,13 @@ def get_image_box(image, box):
     return Image.fromarray(roi)
 
 
-def train_svm(svm, dataloader, optimizer, num_epochs):
+def train_svm(svm, dataloader, dataloader_val, optimizer, scheduler, num_epochs):
     start_time = str(datetime.timestamp(datetime.now()) * 1000)
 
     model, preprocess = clip.load("ViT-B/32", device="cuda")
 
     losses = []
+    val_losses = []
 
     svm.train()
 
@@ -173,29 +175,60 @@ def train_svm(svm, dataloader, optimizer, num_epochs):
             for i in range(len(images)):
                 features = []
 
-                feature = model.encode_image(images[i].cuda()).to(torch.float32)
+                feature = model.encode_image(images[i].cuda(device=0)).to(torch.float32)
                 features.append(feature)
 
                 features = torch.cat(features, dim=0)
 
-                svm.cuda()
                 outputs = svm(features)
-                loss = F.cross_entropy(outputs.cuda(), labels[i].long().cuda())
+                loss = F.cross_entropy(outputs.cuda(device=0), labels[i].long().cuda(device=0))
                 loss.backward()
 
             optimizer_step = datetime.now()
             optimizer.step()
             losses.append(loss.item())
 
-            with open("WCLIP"+start_time+".txt", "w") as f:
+            with open("WCLIP" + start_time + ".txt", "w") as f:
                 f.write(str(losses))
 
             print("Total : ", datetime.now() - zero_grad)
 
             print(f"Loss: {loss.item():.4f}")
 
+        svm.eval()
+
+        current_val_loss = []
+        for batch_idx, (images, labels) in tqdm(enumerate(dataloader_val)):
+            validation = datetime.now()
+
+            features_start = datetime.now()
+            for i in range(len(images)):
+                features = []
+
+                feature = model.encode_image(images[i].cuda(device=0)).to(torch.float32)
+                features.append(feature)
+
+                features = torch.cat(features, dim=0)
+
+                outputs = svm(features)
+                loss = F.cross_entropy(outputs.cuda(device=0), labels[i].long().cuda(device=0))
+                loss.backward()
+
+            val_losses.append(loss.item())
+            current_val_loss.append(loss.item)
+
+            with open("WCLIP" + start_time + "_val.txt", "w") as f:
+                f.write(str(val_losses))
+
+            print("Val Total : ", datetime.now() - validation)
+
+            print(f"Val Loss: {loss.item():.4f}")
+
+        torch.save(svm.state_dict(), "./models/WCLIP_attempt" + str(len(os.listdir("./models"))) + "E" + str(epoch))
+        scheduler.step()
+
     plt.plot(losses)
-    plt.show
+    plt.show()
 
     return svm
 
@@ -225,7 +258,7 @@ prev_return = []
 
 def main():
     vgg = VGG16()
-    svm = SVM(21).to(device)
+    svm = SVM(21).cuda(device=device)
 
     preprocess = transforms.Compose([
         transforms.ToTensor(),
@@ -310,7 +343,8 @@ def main():
             sample = negative[random_index]
             if len(negative) > 1:
                 del negative[random_index]
-            final_rects.append(preprocess(get_image_box(original_image, cv_rect_to_pil_rect(sample[0]))))
+            processed_rect = preprocess(get_image_box(original_image, cv_rect_to_pil_rect(sample[0])))
+            final_rects.append(processed_rect)
             labels.append(0.0)
 
         temp = list(zip(final_rects, labels))
@@ -327,16 +361,22 @@ def main():
     voc_dataset = VOCDetection(root="../VOC2012", year="2012", image_set="train", download=False,
                                transforms=transform)
 
+    voc_dataset_val = VOCDetection(root="../VOC2012", year="2012", image_set="trainval", download=False,
+                                   transforms=transform)
+
     dataloader = DataLoader(voc_dataset, batch_size=32, shuffle=True, pin_memory=True)
+    dataloader_val = DataLoader(voc_dataset_val, batch_size=32, shuffle=True, pin_memory=True)
 
-    optimizer = optim.AdamW(svm.parameters(), lr=1e-4)
+    optimizer = optim.AdamW(svm.parameters(), lr=1e-3)
+    scheduler = optim.lr_scheduler.ExponentialLR(optimizer, 0.5)
 
-    svm = train_svm(svm, dataloader, optimizer, num_epochs=5)
+    svm = train_svm(svm, dataloader, dataloader_val, optimizer, scheduler, num_epochs=5).cuda(device=0)
 
     torch.save(svm.state_dict(), "./models/WCLIP_attempt" + str(len(os.listdir("./models"))))
 
+
 if __name__ == "__main__":
     if torch.cuda.is_available():
-        device = torch.device("cuda")
+        device = 0
 
     main()
